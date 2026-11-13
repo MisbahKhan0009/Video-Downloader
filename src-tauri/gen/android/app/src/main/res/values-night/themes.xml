@@ -1,0 +1,9 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Always dark, matching the app: no white flash on launch, light status bar icons. -->
+    <style name="Theme.vidra" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/vidra_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

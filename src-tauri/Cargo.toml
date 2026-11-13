@@ -1,0 +1,48 @@
+[package]
+name = "vidra"
+version = "0.1.0"
+description = "Vidra: grab videos from any page, including paginated sites"
+authors = ["Md. Misbah Khan"]
+license = "MIT"
+edition = "2024"
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name (needed on Windows).
+name = "vidra_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "stream",
+  "cookies",
+  "gzip",
+  "brotli",
+  "deflate",
+  "charset",
+  "http2",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs", "io-util", "time", "macros"] }
+futures-util = "0.3"
+scraper = "0.24"
+url = "2"
+regex = "1"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hex = "0.4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
