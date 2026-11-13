@@ -168,7 +168,7 @@
     height: 100%;
     border-radius: 6px;
     background: var(--accent);
-    box-shadow: 0 0 14px rgba(212, 255, 63, 0.6);
+    box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.6);
     transition: width 0.3s linear;
   }
   .track i.done {

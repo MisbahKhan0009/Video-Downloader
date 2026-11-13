@@ -140,7 +140,7 @@
     height: 100%;
     border-radius: 4px;
     background: var(--accent);
-    box-shadow: 0 0 10px rgba(212, 255, 63, 0.55);
+    box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.55);
     transition: width 0.3s linear;
   }
   [data-status="paused"] .track i,

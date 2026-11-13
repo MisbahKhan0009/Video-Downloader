@@ -120,10 +120,10 @@
     padding-left: 22px;
   }
   .bar.focused {
-    border-color: rgba(212, 255, 63, 0.35);
+    border-color: rgba(var(--accent-rgb), 0.35);
     box-shadow:
       var(--edge),
-      0 0 0 4px rgba(212, 255, 63, 0.07),
+      0 0 0 4px rgba(var(--accent-rgb), 0.07),
       var(--lift);
   }
   .lead {
@@ -178,8 +178,8 @@
     box-shadow: 0 0 8px var(--accent);
   }
   .kind[data-kind="page"] i {
-    background: #9db7ff;
-    box-shadow: 0 0 8px #9db7ff;
+    background: #c9ced8;
+    box-shadow: 0 0 8px #c9ced8;
   }
   .paste {
     flex: none;
@@ -204,9 +204,9 @@
     border-radius: 15px;
     display: grid;
     place-items: center;
-    background: var(--accent);
+    background: var(--accent-grad);
     color: var(--accent-ink);
-    box-shadow: 0 8px 24px -8px rgba(212, 255, 63, 0.6);
+    box-shadow: 0 8px 24px -8px rgba(var(--accent-rgb), 0.6);
     transition:
       transform 0.18s var(--ease),
       opacity 0.18s,
@@ -218,7 +218,7 @@
     border-radius: 18px;
   }
   .go:hover:not(:disabled) {
-    background: #e0ff6e;
+    background: var(--accent-hover);
   }
   .go:active:not(:disabled) {
     transform: scale(0.94);
@@ -237,7 +237,7 @@
     padding: 0 14px;
     border-radius: 999px;
     background: var(--accent-soft);
-    border: 1px solid rgba(212, 255, 63, 0.22);
+    border: 1px solid rgba(var(--accent-rgb), 0.22);
     color: var(--accent);
     font-size: 12.5px;
     animation: rise 0.3s var(--ease);

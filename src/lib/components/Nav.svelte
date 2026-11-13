@@ -55,7 +55,7 @@
   }
   .mark {
     margin-bottom: 26px;
-    filter: drop-shadow(0 6px 18px rgba(212, 255, 63, 0.25));
+    filter: drop-shadow(0 6px 18px rgba(var(--accent-rgb), 0.25));
   }
   .items {
     display: flex;
@@ -95,7 +95,7 @@
     margin-top: -9px;
     border-radius: 0 4px 4px 0;
     background: var(--accent);
-    box-shadow: 0 0 12px rgba(212, 255, 63, 0.6);
+    box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.6);
   }
   .ico {
     position: relative;

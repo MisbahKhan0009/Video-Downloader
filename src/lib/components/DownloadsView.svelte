@@ -99,15 +99,15 @@
     height: 7px;
     border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 0 0 rgba(212, 255, 63, 0.6);
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.6);
     animation: pulse 1.6s infinite;
   }
   @keyframes pulse {
     70% {
-      box-shadow: 0 0 0 8px rgba(212, 255, 63, 0);
+      box-shadow: 0 0 0 8px rgba(var(--accent-rgb), 0);
     }
     100% {
-      box-shadow: 0 0 0 0 rgba(212, 255, 63, 0);
+      box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0);
     }
   }
   .vacts {

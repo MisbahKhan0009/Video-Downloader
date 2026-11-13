@@ -102,10 +102,10 @@
     background: rgba(24, 26, 31, 0.7);
   }
   .card.sel {
-    border-color: rgba(212, 255, 63, 0.55);
+    border-color: rgba(var(--accent-rgb), 0.55);
     box-shadow:
-      0 0 0 1px rgba(212, 255, 63, 0.25),
-      0 18px 40px -22px rgba(212, 255, 63, 0.4);
+      0 0 0 1px rgba(var(--accent-rgb), 0.25),
+      0 18px 40px -22px rgba(var(--accent-rgb), 0.4);
   }
   .media {
     grid-column: 1 / -1;
@@ -225,7 +225,7 @@
   .get {
     color: var(--accent);
     background: var(--accent-soft);
-    box-shadow: inset 0 0 0 1px rgba(212, 255, 63, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.18);
   }
   .get:hover:not(:disabled) {
     color: var(--accent-ink);

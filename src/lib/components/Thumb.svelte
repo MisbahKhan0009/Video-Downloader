@@ -16,7 +16,7 @@
   const hue = $derived.by(() => {
     let h = 0;
     for (const c of seed) h = (h * 31 + c.charCodeAt(0)) % 360;
-    return h;
+    return 200 + (h % 70);
   });
 </script>
 
@@ -44,13 +44,25 @@
 <style>
   .thumb {
     position: relative;
+    isolation: isolate;
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background:
-      radial-gradient(120% 90% at 20% 0%, hsla(var(--h), 30%, 40%, 0.28), transparent 60%),
-      radial-gradient(90% 90% at 100% 100%, hsla(calc(var(--h) + 40), 25%, 30%, 0.22), transparent 60%),
-      #15171b;
+    background: linear-gradient(
+      160deg,
+      hsl(var(--h), 18%, 13%) 0%,
+      hsl(calc(var(--h) + 25), 32%, 19%) 100%
+    );
+  }
+  .thumb::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: 0.18;
+    mix-blend-mode: overlay;
+    z-index: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    pointer-events: none;
   }
   img {
     position: absolute;
@@ -58,6 +70,7 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    z-index: 1;
     opacity: 0;
     transform: scale(1.02);
     transition:
@@ -70,6 +83,7 @@
   }
   .ph {
     position: absolute;
+    z-index: 2;
     inset: 0;
     display: grid;
     place-content: center;
