@@ -35,7 +35,6 @@
     height: 20px;
     border-radius: 50%;
     background: #c9cdd3;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
     transition: transform 0.25s var(--ease), background 0.2s;
   }
   .tg.on {

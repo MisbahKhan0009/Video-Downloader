@@ -204,9 +204,8 @@
     border-radius: 15px;
     display: grid;
     place-items: center;
-    background: var(--accent-grad);
+    background: var(--accent);
     color: var(--accent-ink);
-    box-shadow: 0 8px 24px -8px rgba(var(--accent-rgb), 0.6);
     transition:
       transform 0.18s var(--ease),
       opacity 0.18s,
@@ -226,7 +225,6 @@
   .go:disabled {
     background: var(--glass-3);
     color: var(--faint);
-    box-shadow: none;
   }
   .suggest {
     display: inline-flex;

@@ -225,7 +225,6 @@
   .get {
     color: var(--accent);
     background: var(--accent-soft);
-    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.18);
   }
   .get:hover:not(:disabled) {
     color: var(--accent-ink);

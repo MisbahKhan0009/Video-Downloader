@@ -55,7 +55,7 @@
   }
   .mark {
     margin-bottom: 26px;
-    filter: drop-shadow(0 6px 18px rgba(var(--accent-rgb), 0.25));
+    filter: none;
   }
   .items {
     display: flex;
@@ -81,9 +81,6 @@
   .item.on {
     color: var(--text);
     background: var(--glass-3);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.08),
-      0 0 0 1px var(--line);
   }
   .item.on::before {
     content: "";

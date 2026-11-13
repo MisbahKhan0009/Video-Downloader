@@ -6,6 +6,7 @@
   import Logo from "./Logo.svelte";
   import { app } from "$lib/store.svelte";
   import { api } from "$lib/api";
+  import { THEMES } from "$lib/theme";
 
   async function pickFolder() {
     try {
@@ -40,6 +41,18 @@
       <button class="btn sm quiet" onclick={() => api.revealFile(app.settings.dir)}>Open</button>
     {/if}
     <button class="btn sm quiet" onclick={resetFolder}><RotateCcw size={13} />Default</button>
+  </div>
+</section>
+
+<section class="group glass">
+  <div class="g-title">Accent</div>
+  <div class="swatches">
+    {#each THEMES as t (t.id)}
+      <button class="sw" class:on={app.settings.theme === t.id} onclick={() => app.setTheme(t.id)} aria-pressed={app.settings.theme === t.id}>
+        <span class="dot" style="background:{t.accent}"></span>
+        <span class="sw-name">{t.name}</span>
+      </button>
+    {/each}
   </div>
 </section>
 
@@ -157,6 +170,39 @@
   .seg button.on {
     background: var(--glass-3);
     color: var(--text);
+  }
+  .swatches {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 8px;
+  }
+  .sw {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 12px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: transparent;
+    font-size: 13px;
+    color: var(--muted);
+    transition: border-color 0.16s, color 0.16s, background 0.16s;
+  }
+  .sw:hover {
+    color: var(--text);
+    background: var(--glass-2);
+  }
+  .sw.on {
+    color: var(--text);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    flex: none;
   }
   .about {
     grid-template-columns: auto minmax(0, 1fr) auto;

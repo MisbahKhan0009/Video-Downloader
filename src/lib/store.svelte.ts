@@ -2,6 +2,7 @@ import { SvelteSet } from "svelte/reactivity";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { api, onDeepScan, onDownload, type DetailLink, type PageScan, type Progress, type VideoItem, type VideoKind } from "./api";
 import { looksLikeUrl, titleOf, uid } from "./format";
+import { applyTheme, randomCorner, themeById } from "./theme";
 
 export type View = "grab" | "downloads" | "settings";
 
@@ -29,6 +30,7 @@ export interface Settings {
   autoDeep: boolean;
   autoGrab: boolean;
   pagesPerBatch: number;
+  theme: string;
 }
 
 interface Toast {
@@ -71,7 +73,7 @@ class Store {
   loadingPage = $state<string | null>(null);
 
   downloads = $state<Download[]>([]);
-  settings = $state<Settings>({ dir: "", autoDeep: true, autoGrab: true, pagesPerBatch: 3 });
+  settings = $state<Settings>({ dir: "", autoDeep: true, autoGrab: true, pagesPerBatch: 3, theme: "ember" });
   toasts = $state<Toast[]>([]);
 
   #saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -93,6 +95,7 @@ class Store {
     this.os = info.os;
 
     this.settings = load(LS_SETTINGS, this.settings);
+    applyTheme(themeById(this.settings.theme), randomCorner());
     if (!this.settings.dir) this.settings.dir = await api.defaultDir().catch(() => "");
 
     const saved = load<{ items: Download[] }>(LS_DOWNLOADS, { items: [] }).items;
@@ -433,6 +436,12 @@ class Store {
   }
 
   // ---------------------------------------------------------------- settings & misc
+
+  setTheme(id: string) {
+    this.settings.theme = id;
+    applyTheme(themeById(id));
+    this.saveSettings();
+  }
 
   saveSettings() {
     try {

@@ -143,7 +143,6 @@
   .tabs button.on {
     background: var(--glass-3);
     color: var(--text);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
   .tabs button.on span {
     color: var(--accent);

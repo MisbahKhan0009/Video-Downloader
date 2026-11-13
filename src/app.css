@@ -1,6 +1,6 @@
-/* Vidra design tokens: graphite glass over a grainy blue dusk, one periwinkle accent. */
+/* Vidra design tokens: black, one soft corner glow, dense grain, a single accent (set at runtime by theme.ts). */
 :root {
-  --bg: #0a0b0d;
+  --bg: #060607;
   --bg-raise: #101215;
   --glass: rgba(255, 255, 255, 0.032);
   --glass-2: rgba(255, 255, 255, 0.055);
@@ -10,12 +10,13 @@
   --text: #eceef1;
   --muted: #8d929b;
   --faint: #777c86;
-  --accent: #8fa8ff;
-  --accent-rgb: 143, 168, 255;
-  --accent-hover: #a9bcff;
-  --accent-grad: linear-gradient(180deg, #b0c2ff 0%, #7f99ff 100%);
+  --accent: #ff7a3d;
+  --accent-rgb: 255, 122, 61;
+  --accent-hover: #ff8f5c;
   --accent-soft: rgba(var(--accent-rgb), 0.13);
-  --accent-ink: #0a0f24;
+  --accent-ink: #1a0a02;
+  --glow-rgb: 255, 104, 38;
+  --glow-at: 100% 0%;
   --danger: #ff6b5b;
   --danger-soft: rgba(255, 107, 91, 0.12);
   --warn: #ffbe55;
@@ -59,33 +60,30 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* One smooth vertical gradient: near-black up top, settling into deep blue below. */
+/* Black canvas with one soft glow bleeding in from a corner (the corner changes per launch). */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  background: linear-gradient(
-    180deg,
-    #0a0b0e 0%,
-    #0a0c12 38%,
-    #0c1226 62%,
-    #10204f 84%,
-    #19307a 100%
-  );
+  background:
+    radial-gradient(60vmax 60vmax at var(--glow-at), rgba(var(--glow-rgb), 0.34), rgba(var(--glow-rgb), 0.1) 38%, transparent 70%),
+    radial-gradient(110vmax 110vmax at var(--glow-at), rgba(var(--glow-rgb), 0.07), transparent 65%),
+    var(--bg);
+  transition: background 0.6s var(--ease);
 }
 
-/* Film grain over everything, so the gradient reads as texture instead of banding. */
+/* Dense film grain: fine, high-frequency particles over the whole window. */
 body::after {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.11;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  opacity: 0.16;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.35' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/><feComponentTransfer><feFuncA type='table' tableValues='0 0.9'/></feComponentTransfer></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size: 180px 180px;
 }
 
 button,
@@ -157,7 +155,6 @@ a {
   border-radius: 999px;
   background: var(--glass-2);
   border: 1px solid var(--line);
-  box-shadow: var(--edge);
   font-size: 14px;
   font-weight: 500;
   letter-spacing: -0.005em;
@@ -179,12 +176,9 @@ a {
   opacity: 0.45;
 }
 .btn.primary {
-  background: var(--accent-grad);
+  background: var(--accent);
   color: var(--accent-ink);
   border-color: transparent;
-  box-shadow:
-    0 0 0 1px rgba(var(--accent-rgb), 0.4),
-    0 10px 30px -10px rgba(var(--accent-rgb), 0.45);
   font-weight: 600;
 }
 .btn.primary:hover:not(:disabled) {
@@ -193,7 +187,6 @@ a {
 .btn.quiet {
   background: transparent;
   border-color: transparent;
-  box-shadow: none;
   color: var(--muted);
 }
 .btn.quiet:hover:not(:disabled) {
