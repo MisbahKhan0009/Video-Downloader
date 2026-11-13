@@ -1,6 +1,6 @@
 [package]
 name = "vidra"
-version = "0.2.0"
+version = "0.2.1"
 description = "Vidra: grab videos from any page, including paginated sites"
 authors = ["Md. Misbah Khan"]
 license = "MIT"

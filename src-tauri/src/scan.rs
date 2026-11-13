@@ -37,6 +37,14 @@ impl VideoItem {
     }
 }
 
+/// Treat everything as one video and return its best variant.
+pub fn collapse_all(mut items: Vec<VideoItem>) -> Option<VideoItem> {
+    if let Some(g) = items.first().map(|v| v.group.clone()) {
+        items.iter_mut().for_each(|v| v.group = g.clone());
+    }
+    collapse_variants(items).into_iter().next()
+}
+
 /// Keep one entry per video: the best quality variant, carrying over any
 /// title / thumbnail the others had. Order of first appearance is kept.
 pub fn collapse_variants(items: Vec<VideoItem>) -> Vec<VideoItem> {
@@ -136,6 +144,18 @@ const PREV_WORDS: &[&str] = &["prev", "previous", "previous page", "‹", "«", 
 
 fn clean_text(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// "We will go to the end of the ocean | ClipSite" -> "We will go to the end of the ocean"
+fn strip_site_suffix(t: &str) -> String {
+    for sep in [" | ", " – ", " — ", " - ", " :: ", " · "] {
+        if let Some((head, tail)) = t.rsplit_once(sep) {
+            if tail.chars().count() <= 32 && head.chars().count() >= 8 {
+                return head.trim().to_string();
+            }
+        }
+    }
+    t.to_string()
 }
 
 fn non_empty(s: Option<&str>) -> Option<String> {
@@ -304,7 +324,7 @@ pub fn scan_html(page_url: &Url, html: &str) -> PageScan {
     }
     let page_title = non_empty(metas.get("og:title").map(|s| s.as_str()))
         .or_else(|| non_empty(metas.get("twitter:title").map(|s| s.as_str())))
-        .or_else(|| doc.select(&S_TITLE).next().and_then(|t| non_empty(Some(&t.text().collect::<String>()))));
+        .or_else(|| doc.select(&S_TITLE).next().and_then(|t| non_empty(Some(&t.text().collect::<String>()))).map(|t| strip_site_suffix(&t)));
     let page_image = metas
         .get("og:image")
         .or_else(|| metas.get("twitter:image"))
@@ -410,12 +430,33 @@ pub fn scan_html(page_url: &Url, html: &str) -> PageScan {
 
         let kind = net::kind_from_url(&u);
         if kind != LinkKind::Unknown {
-            let title = non_empty(el.attr("download"))
-                .or_else(|| non_empty(el.attr("title")))
-                .or_else(|| (!text.is_empty() && text.len() < 160).then(|| text.clone()))
-                .or_else(|| img.and_then(|i| non_empty(i.value().attr("alt"))));
+            // Text like "MP4 (1080p, h264, 516.37 MB)" describes a quality, not the video.
+            let label = net::format_label(&text)
+                .or_else(|| el.attr("title").and_then(net::format_label))
+                .or_else(|| el.attr("download").and_then(|d| net::format_label(&d.replace(['_', '-'], " "))));
+            let title = if label.is_some() {
+                // A real file name in download="…" still beats the page title.
+                non_empty(el.attr("download")).filter(|d| net::format_label(&d.replace(['_', '-', '.'], " ")).is_none())
+            } else {
+                non_empty(el.attr("title"))
+                    .or_else(|| (!text.is_empty() && text.len() < 160).then(|| text.clone()))
+                    .or_else(|| img.and_then(|i| non_empty(i.value().attr("alt"))))
+                    .or_else(|| non_empty(el.attr("download")))
+            };
             let thumb = img.and_then(|i| img_src(i, &base));
-            col.push(u, title, thumb, page_url, "link", None);
+            let source = if label.is_some() { "download button" } else { "link" };
+            if let Some(i) = col.push(u, title, thumb, page_url, source, None) {
+                if let Some((q, size)) = label {
+                    let v = &mut col.items[i];
+                    v.source = source.into();
+                    if v.quality.is_none() {
+                        v.quality = q;
+                    }
+                    if v.size.is_none() {
+                        v.size = size;
+                    }
+                }
+            }
             continue;
         }
         if !net::same_site(&u, page_url) {
@@ -507,7 +548,8 @@ pub fn scan_html(page_url: &Url, html: &str) -> PageScan {
     // A page built around one player (one <video>, or an og:video) shows one clip:
     // everything found outside plain download links is that clip in other qualities.
     let players = doc.select(&S_VIDEO).count();
-    let single_player = players == 1 || (players == 0 && metas.contains_key("og:video"));
+    let has_buttons = col.items.iter().any(|v| v.source == "download button");
+    let single_player = players == 1 || (players == 0 && (metas.contains_key("og:video") || has_buttons));
     if single_player {
         if let Some(g) = col.items.iter().find(|v| v.source != "link").map(|v| v.group.clone()) {
             for v in col.items.iter_mut().filter(|v| v.source != "link") {

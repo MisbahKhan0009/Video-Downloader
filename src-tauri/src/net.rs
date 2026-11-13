@@ -297,6 +297,83 @@ pub fn group_key(u: &Url) -> String {
     u.as_str().to_string()
 }
 
+/// Download buttons are often labelled with the format instead of a title:
+/// "MP4 (1080p, h264, 516.37 MB)", "Download HD", "720p · 210 MB".
+/// Returns (quality, size in bytes) when `text` is such a label, `None` when it reads like a real title.
+pub fn format_label(text: &str) -> Option<(Option<u32>, Option<u64>)> {
+    const WORDS: &[&str] = &[
+        "mp4", "webm", "mkv", "mov", "m4v", "avi", "flv", "3gp", "ts", "hls", "m3u8", "h264", "h265", "x264", "x265",
+        "hevc", "avc", "av1", "vp8", "vp9", "aac", "mp3", "opus", "kb", "mb", "gb", "kbps", "mbps", "fps", "bit",
+        "bitrate", "download", "dl", "get", "save", "video", "file", "quality", "original", "source", "full", "size",
+        "audio", "with", "sound", "no", "and", "or", "the", "in", "format", "res", "resolution", "mirror", "server",
+        "link", "direct", "best", "version", "codec",
+    ];
+    let t = text.trim();
+    if t.is_empty() || t.len() > 90 {
+        return None;
+    }
+    let toks: Vec<String> = t
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+        .map(|s| s.trim_matches('.').to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if toks.is_empty() {
+        return None;
+    }
+    let is_noise = |w: &str| {
+        WORDS.contains(&w)
+            || quality_token(w).is_some()
+            || w.chars().all(|c| c.is_ascii_digit() || c == '.')
+            || (w.ends_with("fps") && w[..w.len() - 3].chars().all(|c| c.is_ascii_digit()))
+            || (w.ends_with("mb") || w.ends_with("gb") || w.ends_with("kb")) && w[..w.len() - 2].chars().all(|c| c.is_ascii_digit() || c == '.')
+    };
+    let meaningful = toks.iter().filter(|w| !is_noise(w)).count();
+    let has_format_signal = toks.iter().any(|w| quality_token(w).is_some() || WORDS[..32].contains(&w.as_str()) || w == "download");
+    if meaningful > 0 || !has_format_signal {
+        return None;
+    }
+    // size: "516.37 MB", "1.2GB"
+    let lower = t.to_ascii_lowercase();
+    let mut size = None;
+    let bytes = lower.as_bytes();
+    for unit in [("gb", 1u64 << 30), ("mb", 1 << 20), ("kb", 1 << 10)] {
+        if let Some(pos) = lower.find(unit.0) {
+            let mut start = pos;
+            while start > 0 && (bytes[start - 1] == b' ') {
+                start -= 1;
+            }
+            let end = start;
+            while start > 0 && (bytes[start - 1].is_ascii_digit() || bytes[start - 1] == b'.') {
+                start -= 1;
+            }
+            if let Ok(v) = lower[start..end].parse::<f64>() {
+                size = Some((v * unit.1 as f64) as u64);
+                break;
+            }
+        }
+    }
+    Some((quality_of_text(t), size))
+}
+
+/// A request that looks like a person clicking a download link in a browser tab.
+pub fn nav_get(url: &Url, referer: Option<&str>) -> reqwest::RequestBuilder {
+    let mut r = CLIENT
+        .get(url.clone())
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,video/*;q=0.9,*/*;q=0.8")
+        .header("Accept-Encoding", "identity")
+        .header("Sec-Fetch-Dest", "document")
+        .header("Sec-Fetch-Mode", "navigate")
+        .header("Sec-Fetch-User", "?1")
+        .header("Upgrade-Insecure-Requests", "1");
+    if let Some(rf) = referer {
+        let site = Url::parse(rf).ok().map(|p| if same_site(&p, url) { "same-origin" } else { "cross-site" }).unwrap_or("cross-site");
+        r = r.header(reqwest::header::REFERER, rf).header("Sec-Fetch-Site", site);
+    } else {
+        r = r.header("Sec-Fetch-Site", "none");
+    }
+    r
+}
+
 // ------------------------------------------------------------ rate limiting
 
 /// How long to wait before retrying a 429 / 503 answer (honours Retry-After).
@@ -370,6 +447,16 @@ mod tests {
         assert_eq!(q("https://c.x/v/2024/clip.mp4"), None);
         assert_eq!(quality_of_text("HD 720p"), Some(720));
         assert_eq!(quality_of_text("4K"), Some(2160));
+    }
+
+    #[test]
+    fn spots_format_labels() {
+        assert_eq!(format_label("MP4 (1080p, h264, 516.37 MB)"), Some((Some(1080), Some(541_453_189))));
+        assert_eq!(format_label("Download 720p"), Some((Some(720), None)));
+        assert_eq!(format_label("HD 1.2GB").map(|x| x.0), Some(Some(720)));
+        assert_eq!(format_label("We will go to the end of pacific ocean to see"), None);
+        assert_eq!(format_label("Sunset 1080p"), None);
+        assert_eq!(format_label("Download"), Some((None, None)));
     }
 
     #[test]

@@ -249,17 +249,34 @@ async fn download_file<F: Fn(Progress)>(
     ctl: &Ctl,
     rep: &mut Reporter<F>,
 ) -> Result<Outcome, String> {
-    let url = Url::parse(&req.url).map_err(|_| "Invalid video link".to_string())?;
+    let mut url = Url::parse(&req.url).map_err(|_| "Invalid video link".to_string())?;
+    let mut referer = req.referer.clone();
     let part = part_path(dir, &req.id);
     let mut attempts = 0;
     let mut name_hint: Option<String> = None;
     let mut ext_hint: Option<String> = None;
     let mut limited = 0u32;
+    // Ways to ask for the file, tried in order whenever the site answers 401/403/410.
+    let mut way = Way::Media;
+    let mut refreshed = false;
+    let mut page_hops = 0;
 
     loop {
         let have = fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
-        // Like a browser's <video>: always a ranged request.
-        let r = net::media_get(&url, req.referer.as_deref()).header(RANGE, format!("bytes={have}-"));
+        let range = format!("bytes={have}-");
+        let r = match way {
+            // Like a browser's <video>: always a ranged request.
+            Way::Media => net::media_get(&url, referer.as_deref()).header(RANGE, range),
+            // Like clicking a download link in a tab.
+            Way::Navigate => {
+                let r = net::nav_get(&url, referer.as_deref());
+                if have > 0 { r.header(RANGE, range) } else { r }
+            }
+            Way::NoReferer => {
+                let r = net::nav_get(&url, None);
+                if have > 0 { r.header(RANGE, range) } else { r }
+            }
+        };
         let resp = match r.send().await {
             Ok(x) => x,
             Err(e) => {
@@ -285,6 +302,57 @@ async fn download_file<F: Fn(Progress)>(
         }
         rep.base.note = None;
         let status = resp.status().as_u16();
+
+        if matches!(status, 401 | 403 | 410) {
+            way = match way {
+                Way::Media => Way::Navigate,
+                Way::Navigate if !refreshed && referer.is_some() => {
+                    // Signed links expire. Read the video's page again for a fresh one.
+                    refreshed = true;
+                    rep.note(Some("Link refused, getting a fresh one from the page".into()));
+                    if let Some(fresh) = fresh_link(referer.as_deref().unwrap(), &url).await {
+                        url = fresh;
+                    }
+                    rep.note(None);
+                    Way::Media
+                }
+                Way::Navigate => Way::NoReferer,
+                Way::NoReferer => {
+                    return Err(format!(
+                        "The site refused this download ({status}). The video may need a signed-in account, \
+                         or the site blocks downloads outside its own player"
+                    ));
+                }
+            };
+            continue;
+        }
+
+        // A "download" link that opens a web page: read it and follow the video inside.
+        let is_html = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|c| c.to_ascii_lowercase().contains("text/html"));
+        if is_html && resp.status().is_success() && have == 0 {
+            page_hops += 1;
+            if page_hops > 2 {
+                return Err("This link opens a web page, not a video".into());
+            }
+            let page_url = resp.url().clone();
+            let html = resp.text().await.map_err(|e| friendly(&e))?;
+            let scan = crate::scan::scan_html(&page_url, &html);
+            let best = crate::scan::collapse_all(scan.videos);
+            match best {
+                Some(v) if v.url != url.as_str() => {
+                    url = Url::parse(&v.url).map_err(|_| "Invalid video link".to_string())?;
+                    referer = Some(page_url.to_string());
+                    way = Way::Media;
+                    continue;
+                }
+                _ => return Err("This link opens a web page, not a video".into()),
+            }
+        }
+
         if status == 416 && have > 0 {
             // Already have every byte.
             rep.base.received = have;
@@ -377,6 +445,31 @@ async fn download_file<F: Fn(Progress)>(
     let dest = unique_path(dir, &stem, &ext);
     fs::rename(&part, &dest).await.map_err(|e| format!("Couldn't save file: {e}"))?;
     Ok(Outcome::Done(dest))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Way {
+    Media,
+    Navigate,
+    NoReferer,
+}
+
+/// Re-scan the page a video came from and return its current link
+/// (same file if still listed, else the same video's best quality).
+async fn fresh_link(page: &str, old: &Url) -> Option<Url> {
+    let scan = crate::analyze::scan_page(page, None).await.ok()?;
+    if scan.videos.iter().any(|v| v.url == old.as_str()) {
+        return Some(old.clone());
+    }
+    let group = net::group_key(old);
+    let pick = scan
+        .videos
+        .iter()
+        .filter(|v| v.group == group)
+        .max_by_key(|v| v.rank())
+        .cloned()
+        .or_else(|| crate::scan::collapse_all(scan.videos))?;
+    Url::parse(&pick.url).ok()
 }
 
 fn strip_ext(s: &str) -> &str {

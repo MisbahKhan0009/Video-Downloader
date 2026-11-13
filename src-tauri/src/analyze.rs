@@ -239,9 +239,10 @@ where
                 return Vec::new();
             }
             let Ok(mut page) = scan_page(&link.url, referer.as_deref()).await else { return Vec::new() };
-            // A card's page is one video. If it still lists several without their own
-            // titles, they're qualities of that video: keep only the best.
-            if page.videos.len() > 1 && page.videos.iter().all(|v| v.title.is_none() || v.title == page.videos[0].title) {
+            // A card's page is one video. Unless the page names its videos differently
+            // (a real playlist), everything on it is that video in other qualities.
+            let titled: HashSet<&str> = page.videos.iter().filter_map(|v| v.title.as_deref()).collect();
+            if page.videos.len() > 1 && titled.len() <= 1 {
                 let g = page.videos[0].group.clone();
                 page.videos.iter_mut().for_each(|v| v.group = g.clone());
                 page.videos = scan::collapse_variants(std::mem::take(&mut page.videos));
@@ -251,7 +252,8 @@ where
                 .into_iter()
                 .map(|mut v| {
                     if v.title.is_none() || single {
-                        v.title = link.title.clone().or(page.title.clone()).or(v.title);
+                        // The card's own caption is the real title; the page title is next best.
+                        v.title = link.title.clone().filter(|t| net::format_label(t).is_none()).or(page.title.clone()).or(v.title);
                     }
                     if v.thumbnail.is_none() {
                         v.thumbnail = link.thumbnail.clone().or(page.image.clone());

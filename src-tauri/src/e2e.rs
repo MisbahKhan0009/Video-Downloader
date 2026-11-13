@@ -97,6 +97,68 @@ async fn e2e_paginated_site() {
     assert!(p.path.unwrap().ends_with("Beta 1.ts"));
 }
 
+#[tokio::test]
+#[ignore]
+async fn e2e_quality_buttons_and_403() {
+    let b = base();
+    let out = tempdir2();
+
+    // Listing -> 2 card pages, each with 4 "MP4 (…)" buttons (one a duplicate mirror) + a landing link.
+    let a = analyze::analyze(&format!("{b}/list2.html")).await.unwrap();
+    let page = a.page.unwrap();
+    assert_eq!(page.detail_links.len(), 2);
+    let vids = analyze::deep_scan("q".into(), page.detail_links.clone(), Some(page.url.clone()), Arc::new(AtomicBool::new(false)), |_| {}).await;
+    for v in &vids {
+        println!("card video: {:?} | {:?}p | {:?} bytes | {}", v.title, v.quality, v.size, v.url);
+    }
+    assert_eq!(vids.len(), 2, "exactly one entry per video page");
+    for v in &vids {
+        let t = v.title.as_deref().unwrap();
+        assert!(t.starts_with("We will go to the end of pacific ocean to see.."), "real title, got {t}");
+        assert!(!t.contains("MP4"), "format label must not be the title");
+        assert_eq!(v.quality, Some(1080), "best quality kept");
+    }
+
+    // The scanned link is signed and expires: wait it out, then download.
+    tokio::time::sleep(std::time::Duration::from_secs(7)).await;
+    let mut req_ref = vids[0].clone();
+    let p = {
+        let mgr = Arc::new(Manager::new(1));
+        let last: Arc<Mutex<Option<Progress>>> = Arc::new(Mutex::new(None));
+        let l2 = last.clone();
+        download::run(
+            mgr,
+            DownloadRequest {
+                id: "exp".into(),
+                url: req_ref.url.clone(),
+                kind: "file".into(),
+                title: req_ref.title.take(),
+                referer: req_ref.page_url.clone(),
+                dir: out.to_string_lossy().into_owned(),
+            },
+            move |p| *l2.lock().unwrap() = Some(p),
+        )
+        .await;
+        let p = last.lock().unwrap().clone().unwrap();
+        p
+    };
+    println!("expired-link download: {:?}", p);
+    assert_eq!(p.status, "done", "403 should be recovered by refreshing the link: {:?}", p.error);
+
+    // A "download" link that opens a landing page with the real file inside.
+    let p = fetch_to(&out, "land", format!("{b}/getfile.html?f=ocean1.mp4"), "file", "Landing").await;
+    println!("landing download: {:?}", p);
+    assert_eq!(p.status, "done");
+    assert_eq!(p.received, 200_000);
+}
+
+fn tempdir2() -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("vidra-e2e2-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
 fn tempdir() -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("vidra-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
