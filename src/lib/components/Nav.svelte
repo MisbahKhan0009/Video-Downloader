@@ -35,7 +35,7 @@
       </button>
     {/each}
   </div>
-  <div class="foot mono">v0.1</div>
+  <div class="foot mono">v{__APP_VERSION__.split(".").slice(0, 2).join(".")}</div>
 </nav>
 
 <style>

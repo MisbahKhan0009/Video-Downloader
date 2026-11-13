@@ -21,7 +21,7 @@ Paste (or on Android, **Share**) any link and Vidra decides what it is:
 | **A stream link** (`.m3u8`) | Picks the best quality, downloads every segment (including AES-128 encrypted streams) and joins them. |
 | **A web page** | Reads the HTML for every video: `<video>`/`<source>` tags, Open Graph and JSON-LD video data, direct file links, and player configs hidden in scripts. |
 | **A listing page** with no videos on it | Opens each card/thumbnail it links to and collects the videos inside ("Look inside linked pages"). |
-| **A paginated site** | Detects the pagination (`rel="next"`, numbered links, "Next ›" buttons, or `?page=N` / `/page/N` URL patterns). Jump to any page, or **Collect** the next 3, 5, 10 or 20 pages in one go. |
+| **A paginated site** | Detects the pagination (`rel="next"`, numbered links, "Next ›" buttons, or `?page=N` / `/page/N` URL patterns) and keeps scraping page after page until the last one, with a live count of pages and videos and a **Stop** button. You can also jump to any single page. |
 
 When a page offers the same video in several qualities (360p/720p/1080p files, or an MP4 and an HLS stream of one clip), Vidra lists it once and keeps the best one.
 
@@ -58,11 +58,7 @@ npm run tauri android build -- --apk
 
 ### Releases via GitHub Actions
 
-Every push builds and tests; pushing a tag like `v0.1.0` also publishes a GitHub Release with the Windows installers and the APK attached.
-
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
+Every push to `main` runs the tests, builds the Windows installers and the Android APK, and publishes them to the GitHub Release for the current version (`v` + `version` in `src-tauri/tauri.conf.json`). Pushing again refreshes that release's files. To start a new release, bump the version (in `tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`) and push.
 
 To keep one stable Android signing key (so updates install over the old version), add these repository secrets:
 

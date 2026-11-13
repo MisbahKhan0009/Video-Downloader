@@ -30,7 +30,8 @@ export interface Settings {
   dir: string;
   autoDeep: boolean;
   autoGrab: boolean;
-  pagesPerBatch: number;
+  /** follow "next" pages on its own until the last page */
+  autoCrawl: boolean;
   theme: string;
 }
 
@@ -70,11 +71,15 @@ class Store {
   selected = new SvelteSet<string>();
 
   deep = $state<{ id: string; done: number; total: number; found: number } | null>(null);
-  batch = $state<{ done: number; target: number; stopping: boolean } | null>(null);
+  /** Live state of "scrape every page" (no limit; runs until the last page or Stop). */
+  crawl = $state<{ current: number | null; stopping: boolean } | null>(null);
+  /** Why the last crawl ended, shown next to the page count. */
+  crawlEnded = $state<string | null>(null);
+  #gen = 0; // bumps on every new grab so late results from an old one are dropped
   loadingPage = $state<string | null>(null);
 
   downloads = $state<Download[]>([]);
-  settings = $state<Settings>({ dir: "", autoDeep: true, autoGrab: true, pagesPerBatch: 3, theme: "ember" });
+  settings = $state<Settings>({ dir: "", autoDeep: true, autoGrab: true, autoCrawl: true, theme: "ember" });
   toasts = $state<Toast[]>([]);
 
   #saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -87,7 +92,7 @@ class Store {
     return this.downloads.reduce((s, d) => s + (d.status === "downloading" ? d.speed : 0), 0);
   }
   get busy() {
-    return this.analyzing || !!this.deep || !!this.batch || !!this.loadingPage;
+    return this.analyzing || !!this.deep || !!this.crawl || !!this.loadingPage;
   }
 
   async init() {
@@ -166,6 +171,9 @@ class Store {
 
   reset() {
     this.stopAll();
+    this.#gen++; // the old crawl sees this and quits without touching new state
+    this.crawl = null;
+    this.crawlEnded = null;
     this.mode = "empty";
     this.page = null;
     this.videos = [];
@@ -189,7 +197,9 @@ class Store {
       } else if (res.page) {
         this.mode = "page";
         this.#showPage(res.page, false);
+        this.analyzing = false;
         await this.#maybeDeep(res.page);
+        if (this.settings.autoCrawl && this.page?.nextPage) this.crawlAll();
       }
     } catch (e) {
       this.error = String(e);
@@ -244,10 +254,11 @@ class Store {
   async deepScan(links: DetailLink[], referer: string | null) {
     if (this.deep) return;
     const id = uid();
+    const gen = this.#gen;
     this.deep = { id, done: 0, total: links.length, found: 0 };
     try {
       const vids = await api.deepScan(id, links, referer);
-      this.#addVideos(vids);
+      if (gen === this.#gen) this.#addVideos(vids);
     } catch (e) {
       this.toast(String(e), "error");
     } finally {
@@ -266,12 +277,17 @@ class Store {
   async goToPage(url: string) {
     if (this.loadingPage || !this.page) return;
     this.stopAll();
+    this.#gen++; // the old crawl sees this and quits without touching new state
+    this.crawl = null;
+    this.crawlEnded = null;
     const referer = this.page.url;
     this.loadingPage = url;
     try {
       const p = await api.scanPage(url, referer);
       this.#showPage(p, false);
+      this.loadingPage = null;
       await this.#maybeDeep(p);
+      if (this.settings.autoCrawl && this.page?.nextPage) this.crawlAll();
     } catch (e) {
       this.toast(String(e), "error");
     } finally {
@@ -279,37 +295,62 @@ class Store {
     }
   }
 
-  /** Follow "next" links and collect everything along the way. */
-  async scanMore(count = this.settings.pagesPerBatch) {
-    if (!this.page?.nextPage || this.batch) return;
-    this.batch = { done: 0, target: count, stopping: false };
+  /**
+   * Scrape every page: keep following "next" until the site runs out of pages
+   * or the user presses Stop. Results stream into the grid as each page lands.
+   */
+  async crawlAll() {
+    if (!this.page?.nextPage || this.crawl) return;
+    const gen = this.#gen;
+    const alive = () => gen === this.#gen && this.crawl && !this.crawl.stopping;
+    this.crawl = { current: this.page.currentPage, stopping: false };
+    this.crawlEnded = null;
+    let reason = "Reached the last page";
     try {
-      for (let i = 0; i < count; i++) {
-        const next = this.page?.nextPage;
-        if (!next || this.batch.stopping) break;
-        if (this.scannedPages.includes(next)) break;
-        let p: PageScan;
-        try {
-          p = await api.scanPage(next, this.page?.url);
-        } catch (e) {
-          if (!this.page?.nextInferred) this.toast(String(e), "error");
+      while (true) {
+        if (!alive()) {
+          reason = "Stopped";
+          break;
+        }
+        const from = this.page;
+        const next = from?.nextPage;
+        if (!from || !next) break;
+        if (this.scannedPages.includes(next)) break; // the site looped back
+        let p: PageScan | null = null;
+        let lastErr = "";
+        for (let attempt = 0; attempt < 3 && !p; attempt++) {
+          try {
+            p = await api.scanPage(next, from.url);
+          } catch (e) {
+            lastErr = String(e);
+            if (from.nextInferred) break; // a guessed page that fails is just the end
+            await sleep(1500 * (attempt + 1));
+          }
+        }
+        if (gen !== this.#gen) return; // a new grab replaced this one
+        if (!p) {
+          if (!from.nextInferred) reason = `Stopped on an error: ${lastErr}`;
           break;
         }
         // A guessed "next page" that comes back empty means we ran past the end.
-        if (this.page?.nextInferred && !p.videos.length && !p.detailLinks.length) break;
+        if (from.nextInferred && !p.videos.length && !p.detailLinks.length) break;
         this.#showPage(p, true);
-        if (p.videos.length === 0 && this.settings.autoDeep && p.detailLinks.length) {
+        if (this.crawl) this.crawl = { ...this.crawl, current: p.currentPage };
+        if (p.videos.length === 0 && this.settings.autoDeep && p.detailLinks.length && alive()) {
           await this.deepScan(p.detailLinks, p.url);
         }
-        this.batch = { ...this.batch, done: i + 1 };
+        await sleep(250); // be polite between pages
       }
     } finally {
-      this.batch = null;
+      if (gen === this.#gen) {
+        this.crawl = null;
+        this.crawlEnded = reason;
+      }
     }
   }
 
   stopAll() {
-    if (this.batch) this.batch = { ...this.batch, stopping: true };
+    if (this.crawl) this.crawl = { ...this.crawl, stopping: true };
     this.stopDeep();
   }
 
@@ -502,6 +543,10 @@ class Store {
       this.toast("Couldn't copy", "error");
     }
   }
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export const app = new Store();

@@ -43,13 +43,25 @@
     [
       host(page.url),
       page.currentPage ? `Page ${page.currentPage}` : null,
-      app.scannedPages.length > 1 ? `${app.scannedPages.length} pages collected` : null,
     ]
       .filter(Boolean)
       .join("  ·  "),
   );
   const allSelected = $derived(app.videos.length > 0 && app.selected.size === app.videos.length);
-  const working = $derived(!!app.deep || !!app.batch || !!app.loadingPage);
+  const working = $derived(!!app.deep || !!app.crawl || !!app.loadingPage);
+  const pagesDone = $derived(app.scannedPages.length);
+
+  // Unlimited scraping can collect thousands of videos: render the grid in steps.
+  const STEP = 120;
+  let limit = $state(STEP);
+  const visible = $derived(shown.slice(0, limit));
+  function more(node: HTMLElement) {
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) limit += STEP;
+    }, { rootMargin: "800px" });
+    io.observe(node);
+    return { destroy: () => io.disconnect() };
+  }
 </script>
 
 <section class="head">
@@ -58,12 +70,13 @@
     <h2>{page.title ?? host(page.url)}</h2>
     <div class="stats">
       <span><b class="mono">{app.videos.length}</b> {app.videos.length === 1 ? "video" : "videos"}</span>
-      {#if page.detailLinks.length}<span><b class="mono">{page.detailLinks.length}</b> linked pages</span>{/if}
+      {#if pagesDone > 1 || app.crawlEnded}<span><b class="mono">{pagesDone}</b> {pagesDone === 1 ? "page" : "pages"} scraped</span>{/if}
+      {#if app.crawlEnded && !app.crawl}<span class="ended">{app.crawlEnded}</span>{/if}
       <button class="src" onclick={() => api.openUrl(page.url)}>Open page <ExternalLink size={12} /></button>
     </div>
   </div>
   <div class="head-acts">
-    {#if page.detailLinks.length && !app.deep}
+    {#if page.detailLinks.length && !app.deep && !app.crawl}
       <button class="btn" onclick={() => app.scanLinkedPages()} title="Open each linked page and look for videos inside">
         <Radar size={16} />Scan linked pages
       </button>
@@ -74,7 +87,26 @@
   </div>
 </section>
 
-{#if working}
+{#if app.crawl}
+  <!-- Live scrape: runs page after page until the site has no next page, or Stop. -->
+  <div class="live glass" aria-live="polite">
+    <span class="pulse" class:halt={app.crawl.stopping}></span>
+    <div class="l-main">
+      <div class="l-title">
+        {#if app.crawl.stopping}Stopping…{:else}Scraping page <b class="mono">{app.crawl.current ?? pagesDone}</b>{/if}
+      </div>
+      <div class="l-sub">
+        {#if app.deep}Opening video pages <span class="mono">{app.deep.done}/{app.deep.total}</span>{:else}Following the next page{/if}
+      </div>
+    </div>
+    <div class="l-stat"><b class="mono">{pagesDone}</b><span>pages</span></div>
+    <div class="l-stat"><b class="mono">{app.videos.length}</b><span>videos</span></div>
+    <button class="btn stop" disabled={app.crawl.stopping} onclick={() => app.stopAll()}>
+      <Square size={12} fill="currentColor" />Stop
+    </button>
+    <div class="l-track"><i></i></div>
+  </div>
+{:else if working}
   <div class="working glass">
     <LoaderCircle size={16} class="spin" />
     <div class="w-text">
@@ -83,14 +115,10 @@
       {:else if app.deep}
         Opening linked pages <b class="mono">{app.deep.done}/{app.deep.total}</b>
         <span class="dim">· {app.deep.found} found</span>
-      {:else if app.batch}
-        Collecting pages <b class="mono">{app.batch.done}/{app.batch.target}</b>
       {/if}
     </div>
     {#if app.deep}
       <div class="w-track"><i style="width:{app.deep.total ? (app.deep.done / app.deep.total) * 100 : 0}%"></i></div>
-    {/if}
-    {#if app.deep || app.batch}
       <button class="btn sm quiet" onclick={() => app.stopAll()}><Square size={12} fill="currentColor" />Stop</button>
     {/if}
   </div>
@@ -118,18 +146,10 @@
         <ChevronRight size={18} />
       </button>
     </div>
-    {#if page.nextPage}
-      <div class="more">
-        <span class="more-label">Collect next</span>
-        <div class="seg">
-          {#each [3, 5, 10] as n (n)}
-            <button class:on={app.settings.pagesPerBatch === n} onclick={() => { app.settings.pagesPerBatch = n; app.saveSettings(); }}>{n}</button>
-          {/each}
-        </div>
-        <button class="btn sm" disabled={working} onclick={() => app.scanMore()}>
-          <Layers size={14} />Collect
-        </button>
-      </div>
+    {#if page.nextPage && !app.crawl}
+      <button class="btn sm" disabled={working} onclick={() => app.crawlAll()}>
+        <Layers size={14} />{pagesDone > 1 ? "Continue scraping" : "Scrape all pages"}
+      </button>
     {/if}
   </nav>
 {/if}
@@ -154,10 +174,13 @@
   </div>
 
   <div class="grid">
-    {#each shown as v, i (v.url)}
+    {#each visible as v, i (v.url)}
       <VideoCard video={v} index={i} />
     {/each}
   </div>
+  {#if visible.length < shown.length}
+    <div class="more-sentinel" use:more>Loading more…</div>
+  {/if}
 {:else if !working}
   <div class="empty glass">
     <div class="e-icon"><Radar size={22} /></div>
@@ -269,6 +292,114 @@
     margin-left: auto;
   }
 
+  .ended {
+    color: var(--faint);
+  }
+
+  .live {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    padding: 16px 16px 16px 20px;
+    border-radius: 20px;
+    overflow: hidden;
+    animation: rise 0.3s var(--ease);
+  }
+  .pulse {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: beat 1.4s ease-in-out infinite;
+  }
+  .pulse.halt {
+    background: var(--muted);
+    animation: none;
+  }
+  @keyframes beat {
+    50% {
+      opacity: 0.35;
+      transform: scale(0.8);
+    }
+  }
+  .l-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .l-title {
+    font-size: 15px;
+    font-weight: 500;
+  }
+  .l-title b {
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .l-sub {
+    margin-top: 2px;
+    font-size: 12.5px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .l-stat {
+    display: grid;
+    justify-items: end;
+    line-height: 1.1;
+  }
+  .l-stat b {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .l-stat span {
+    font-size: 11px;
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .stop {
+    background: var(--text);
+    color: var(--bg);
+    border-color: transparent;
+    font-weight: 600;
+  }
+  .stop:hover:not(:disabled) {
+    background: #ffffff;
+  }
+  .l-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    overflow: hidden;
+  }
+  .l-track i {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 30%;
+    background: var(--accent);
+    animation: sweep 1.6s var(--ease) infinite;
+  }
+  @keyframes sweep {
+    from {
+      left: -30%;
+    }
+    to {
+      left: 100%;
+    }
+  }
+  .more-sentinel {
+    text-align: center;
+    padding: 18px;
+    font-size: 13px;
+    color: var(--faint);
+  }
+
   .pager {
     display: flex;
     align-items: center;
@@ -313,34 +444,6 @@
   .gap {
     color: var(--faint);
     padding: 0 4px;
-  }
-  .more {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .more-label {
-    font-size: 13px;
-    color: var(--muted);
-  }
-  .seg {
-    display: flex;
-    padding: 3px;
-    border-radius: 12px;
-    background: var(--glass);
-    border: 1px solid var(--line);
-  }
-  .seg button {
-    min-width: 32px;
-    height: 26px;
-    border-radius: 9px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .seg button.on {
-    background: var(--glass-3);
-    color: var(--text);
   }
 
   .toolbar {
@@ -498,11 +601,22 @@
     .dock {
       display: grid;
     }
-    .more-label {
-      display: none;
-    }
     .pager {
       gap: 8px;
+    }
+    .live {
+      flex-wrap: wrap;
+      gap: 12px 16px;
+      padding: 14px;
+    }
+    .l-main {
+      flex-basis: calc(100% - 30px);
+    }
+    .l-stat {
+      justify-items: start;
+    }
+    .stop {
+      margin-left: auto;
     }
   }
   @media (max-width: 400px) {

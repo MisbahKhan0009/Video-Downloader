@@ -74,21 +74,17 @@
   </div>
   <div class="opt">
     <div>
-      <div class="o-name">Pages per collect</div>
-      <div class="o-desc">How many "next" pages to follow each time you press Collect.</div>
+      <div class="o-name">Scrape every page</div>
+      <div class="o-desc">On a paginated site, keep following the next page until the last one. You can stop it any time.</div>
     </div>
-    <div class="seg">
-      {#each [3, 5, 10, 20] as n (n)}
-        <button class:on={app.settings.pagesPerBatch === n} onclick={() => { app.settings.pagesPerBatch = n; app.saveSettings(); }}>{n}</button>
-      {/each}
-    </div>
+    <Toggle label="Scrape every page" bind:checked={app.settings.autoCrawl} onchange={() => app.saveSettings()} />
   </div>
 </section>
 
 <section class="group glass about">
   <Logo size={40} />
   <div>
-    <div class="o-name">Vidra <span class="mono ver">0.1.0</span></div>
+    <div class="o-name">Vidra <span class="mono ver">{__APP_VERSION__}</span></div>
     <div class="o-desc">Downloads 2 videos at a time and slows down automatically when a site limits requests. Partial downloads resume where they stopped, even after a restart. Only download videos you have the right to save.</div>
   </div>
   <button class="icon-btn" title="Source on GitHub" onclick={() => api.openUrl("https://github.com/MisbahKhan0009/Video-Downloader")}>
@@ -150,26 +146,6 @@
     font-size: 13px;
     color: var(--muted);
     max-width: 480px;
-  }
-  .seg {
-    display: flex;
-    padding: 3px;
-    border-radius: 12px;
-    background: var(--glass);
-    border: 1px solid var(--line);
-    flex: none;
-  }
-  .seg button {
-    min-width: 36px;
-    height: 28px;
-    border-radius: 9px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .seg button.on {
-    background: var(--glass-3);
-    color: var(--text);
   }
   .swatches {
     display: grid;
