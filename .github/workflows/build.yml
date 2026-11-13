@@ -69,17 +69,17 @@ jobs:
     name: Android APK
     needs: test
     runs-on: ubuntu-latest
-    env:
-      NDK_VERSION: 27.2.12479018
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-      - uses: android-actions/setup-android@v3
-      - name: Install NDK
-        run: sdkmanager --install "ndk;${NDK_VERSION}"
+          java-version: 21
+      - name: Android SDK and NDK (preinstalled on the runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/ndk"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
@@ -115,9 +115,7 @@ jobs:
             echo "keyPassword=$KP"
           } > keystore.properties
       - name: Build APK
-        run: |
-          export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
-          npx tauri android build --apk --target aarch64 armv7 x86_64
+        run: npx tauri android build --apk --target aarch64 armv7 x86_64
       - name: Collect
         run: |
           mkdir -p dist
