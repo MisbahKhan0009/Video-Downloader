@@ -54,8 +54,11 @@ async fn e2e_paginated_site() {
     for v in &vids {
         println!("found: {} [{}] {:?}", v.url, v.kind, v.title);
     }
-    assert_eq!(vids.len(), 2);
-    assert!(vids.iter().any(|v| v.kind == "file" && v.title.as_deref() == Some("Alpha 1")));
+    // alpha's page offers 360p, 480p, 1080p and HLS of one clip: only the 1080p file survives.
+    assert_eq!(vids.len(), 2, "one per card, best quality only");
+    let alpha = vids.iter().find(|v| v.title.as_deref() == Some("Alpha 1")).expect("alpha");
+    assert_eq!(alpha.url, format!("{b}/media/alpha.mp4"));
+    assert_eq!(alpha.quality, Some(1080));
     assert!(vids.iter().any(|v| v.kind == "hls" && v.url.contains("master.m3u8")));
 
     // Page 2 via next link
@@ -72,7 +75,11 @@ async fn e2e_paginated_site() {
     let out = tempdir();
     let original = std::fs::read(root.join("media/alpha.mp4")).unwrap();
     std::fs::write(out.join(".vidra-f1.part"), &original[..1_234_567]).unwrap();
-    let p = fetch_to(&out, "f1", format!("{b}/media/alpha.mp4"), "file", "Alpha clip").await;
+    // The server answers the first request for each media file with 429 + Retry-After.
+    // gamma.mp4 is a copy of alpha.mp4 that nothing has requested yet.
+    let started = std::time::Instant::now();
+    let p = fetch_to(&out, "f1", format!("{b}/media/gamma.mp4"), "file", "Alpha clip").await;
+    assert!(started.elapsed().as_millis() >= 900, "should have waited for Retry-After");
     println!("file: {:?}", p);
     assert_eq!(p.status, "done");
     let saved = std::fs::read(p.path.as_ref().unwrap()).unwrap();

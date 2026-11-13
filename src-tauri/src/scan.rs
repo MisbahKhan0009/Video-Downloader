@@ -24,6 +24,41 @@ pub struct VideoItem {
     pub size: Option<u64>,
     /// Where on the page we found it (video tag, meta, link, script…)
     pub source: String,
+    /// Vertical resolution if the page or URL says (720, 1080…)
+    pub quality: Option<u32>,
+    /// Same value for every quality variant of one video.
+    pub group: String,
+}
+
+impl VideoItem {
+    /// Higher is better: resolution, then a direct file over a stream, then size.
+    pub fn rank(&self) -> (u32, u8, u64) {
+        (self.quality.unwrap_or(0), (self.kind == "file") as u8, self.size.unwrap_or(0))
+    }
+}
+
+/// Keep one entry per video: the best quality variant, carrying over any
+/// title / thumbnail the others had. Order of first appearance is kept.
+pub fn collapse_variants(items: Vec<VideoItem>) -> Vec<VideoItem> {
+    let mut out: Vec<VideoItem> = Vec::new();
+    for v in items {
+        match out.iter_mut().find(|o| o.group == v.group) {
+            Some(o) => {
+                let (title, thumb) = (o.title.clone(), o.thumbnail.clone());
+                if v.rank() > o.rank() {
+                    *o = v;
+                }
+                if o.title.is_none() {
+                    o.title = title;
+                }
+                if o.thumbnail.is_none() {
+                    o.thumbnail = thumb;
+                }
+            }
+            None => out.push(v),
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,16 +212,17 @@ struct Collector {
 }
 
 impl Collector {
-    fn push(&mut self, u: Url, title: Option<String>, thumb: Option<String>, page: &Url, source: &str, hint: Option<LinkKind>) {
+    fn push(&mut self, u: Url, title: Option<String>, thumb: Option<String>, page: &Url, source: &str, hint: Option<LinkKind>) -> Option<usize> {
         let kind = match net::kind_from_url(&u) {
             LinkKind::Unknown => hint.unwrap_or(LinkKind::File),
             k => k,
         };
         if kind == LinkKind::Unknown {
-            return;
+            return None;
         }
         let key = u.as_str().to_string();
-        if let Some(existing) = self.items.iter_mut().find(|v| v.url == key) {
+        if let Some(idx) = self.items.iter().position(|v| v.url == key) {
+            let existing = &mut self.items[idx];
             // Merge in better metadata found elsewhere on the page.
             if existing.title.is_none() {
                 existing.title = title;
@@ -194,13 +230,15 @@ impl Collector {
             if existing.thumbnail.is_none() {
                 existing.thumbnail = thumb;
             }
-            return;
+            return Some(idx);
         }
         if !self.seen.insert(key.clone()) {
-            return;
+            return None;
         }
         self.items.push(VideoItem {
             ext: net::ext_of(&u),
+            quality: net::quality_of_url(&u),
+            group: net::group_key(&u),
             url: key,
             title,
             thumbnail: thumb,
@@ -209,6 +247,7 @@ impl Collector {
             size: None,
             source: source.into(),
         });
+        Some(self.items.len() - 1)
     }
 }
 
@@ -279,9 +318,11 @@ pub fn scan_html(page_url: &Url, html: &str) -> PageScan {
         let el = v.value();
         let title = non_empty(el.attr("title")).or_else(|| non_empty(el.attr("aria-label"))).or_else(|| non_empty(el.attr("data-title")));
         let poster = el.attr("poster").or_else(|| el.attr("data-poster")).and_then(|p| resolve(&base, p)).map(|u| u.to_string());
+        // Every source inside one <video> is the same clip in another quality/format.
+        let mut in_tag: Vec<usize> = Vec::new();
         for attr in ["src", "data-src"] {
             if let Some(u) = el.attr(attr).and_then(|s| resolve(&base, s)) {
-                col.push(u, title.clone(), poster.clone(), page_url, "video tag", Some(LinkKind::File));
+                in_tag.extend(col.push(u, title.clone(), poster.clone(), page_url, "video tag", Some(LinkKind::File)));
             }
         }
         for s in v.select(&S_SOURCE) {
@@ -290,10 +331,27 @@ pub fn scan_html(page_url: &Url, html: &str) -> PageScan {
                 Some(t) if t.contains("mpegurl") => Some(LinkKind::Hls),
                 _ => Some(LinkKind::File),
             };
+            // Players label qualities in many ways: size="1080", res="720", label="720p", title="HD"…
+            let label_q = ["size", "res", "data-res", "data-quality", "quality", "label", "title", "data-label", "height"]
+                .iter()
+                .filter_map(|a| se.attr(a))
+                .filter_map(net::quality_of_text)
+                .max();
             for attr in ["src", "data-src"] {
                 if let Some(u) = se.attr(attr).and_then(|x| resolve(&base, x)) {
-                    col.push(u, title.clone(), poster.clone(), page_url, "video tag", hint);
+                    if let Some(i) = col.push(u, title.clone(), poster.clone(), page_url, "video tag", hint) {
+                        if col.items[i].quality.is_none() {
+                            col.items[i].quality = label_q;
+                        }
+                        in_tag.push(i);
+                    }
                 }
+            }
+        }
+        if let Some(&first) = in_tag.first() {
+            let g = col.items[first].group.clone();
+            for &i in &in_tag {
+                col.items[i].group = g.clone();
             }
         }
     }
@@ -446,6 +504,21 @@ pub fn scan_html(page_url: &Url, html: &str) -> PageScan {
         }
     }
 
+    // A page built around one player (one <video>, or an og:video) shows one clip:
+    // everything found outside plain download links is that clip in other qualities.
+    let players = doc.select(&S_VIDEO).count();
+    let single_player = players == 1 || (players == 0 && metas.contains_key("og:video"));
+    if single_player {
+        if let Some(g) = col.items.iter().find(|v| v.source != "link").map(|v| v.group.clone()) {
+            for v in col.items.iter_mut().filter(|v| v.source != "link") {
+                v.group = g.clone();
+            }
+        }
+    }
+
+    // Collapse quality variants (720p/1080p files, MP4 + HLS of one clip) to the best one.
+    col.items = collapse_variants(std::mem::take(&mut col.items));
+
     // A single video on a page is almost always "the" video: give it the page's identity.
     if col.items.len() == 1 {
         let v = &mut col.items[0];
@@ -550,11 +623,32 @@ mod tests {
         </body></html>"#;
         let url = Url::parse("https://x.com/video/alpha").unwrap();
         let s = scan_html(&url, html);
-        assert_eq!(s.videos.len(), 2);
+        // One player: the 720p MP4 and the HLS master are the same clip, keep one.
+        assert_eq!(s.videos.len(), 1);
         assert_eq!(s.videos[0].kind, "file");
+        assert_eq!(s.videos[0].quality, Some(720));
+        assert_eq!(s.videos[0].url, "https://cdn.x.com/a/720.mp4");
         assert_eq!(s.videos[0].thumbnail.as_deref(), Some("https://x.com/p.jpg"));
-        assert_eq!(s.videos[1].kind, "hls");
-        assert_eq!(s.videos[1].url, "https://cdn.x.com/a/master.m3u8");
+    }
+
+    #[test]
+    fn keeps_best_quality_variant() {
+        let html = r#"<html><body>
+          <a href="/f/sunset_480p.mp4">Sunset 480p</a>
+          <a href="/f/sunset_1080p.mp4">Sunset 1080p</a>
+          <a href="/f/sunset_720p.mp4?sig=1">Sunset 720p</a>
+          <a href="/f/harbour.mp4">Harbour</a>
+          <video><source src="/s/rain/360.mp4" label="360p"><source src="/s/rain/hd.mp4" label="1080p"></video>
+          <video><source src="/s/tide.webm" size="720"></video>
+        </body></html>"#;
+        let url = Url::parse("https://x.com/list").unwrap();
+        let s = scan_html(&url, html);
+        let urls: Vec<&str> = s.videos.iter().map(|v| v.url.as_str()).collect();
+        assert_eq!(s.videos.len(), 4, "{urls:?}");
+        assert!(urls.contains(&"https://x.com/f/sunset_1080p.mp4"));
+        assert!(urls.contains(&"https://x.com/f/harbour.mp4"));
+        assert!(urls.contains(&"https://x.com/s/rain/hd.mp4"));
+        assert!(urls.contains(&"https://x.com/s/tide.webm"));
     }
 
     #[test]

@@ -8,7 +8,7 @@
   import Thumb from "./Thumb.svelte";
   import { app } from "$lib/store.svelte";
   import { api, type VideoItem } from "$lib/api";
-  import { bytes, host, label, titleOf } from "$lib/format";
+  import { bytes, host, label, qualityLabel, titleOf } from "$lib/format";
 
   let { video, index = 0 }: { video: VideoItem; index?: number } = $props();
 
@@ -36,7 +36,7 @@
     <Thumb src={video.thumbnail} seed={video.url} label={label(video)} />
     <span class="shade"></span>
     <span class="check" aria-hidden="true"><Check size={13} strokeWidth={3} /></span>
-    <span class="badge" class:hls={video.kind === "hls"}>{label(video)}</span>
+    <span class="badge" class:hls={video.kind === "hls"}>{label(video)}{#if video.quality}<b class="q">{qualityLabel(video.quality)}</b>{/if}</span>
     {#if size}<span class="size mono">{size}</span>{/if}
     {#if dl && dl.status !== "canceled"}
       <span class="bar" class:done={dl.status === "done"} class:err={dl.status === "error"}><i style="width:{pct}%"></i></span>
@@ -46,7 +46,9 @@
     <h3 title={titleOf(video)}>{titleOf(video)}</h3>
     <div class="meta">
       <span>{host(video.pageUrl ?? video.url)}</span>
-      {#if dl?.status === "downloading"}
+      {#if dl?.note}
+        <span class="wait">Waiting</span>
+      {:else if dl?.status === "downloading"}
         <span class="live mono">{Math.round(pct)}%</span>
       {:else if dl?.status === "done"}
         <span class="ok">Saved</span>
@@ -217,6 +219,16 @@
     text-overflow: ellipsis;
   }
   .live {
+    color: var(--accent);
+  }
+  .wait {
+    color: var(--warn);
+  }
+  .q {
+    margin-left: 6px;
+    padding-left: 6px;
+    border-left: 1px solid var(--line-2);
+    font-weight: 600;
     color: var(--accent);
   }
   .ok {

@@ -27,7 +27,9 @@
   <div class="info">
     <div class="t" title={d.fileName ?? d.title}>{d.fileName ?? d.title}</div>
     <div class="sub mono">
-      {#if d.status === "downloading"}
+      {#if d.note && (d.status === "downloading" || d.status === "queued")}
+        <span class="warn">{d.note}</span>
+      {:else if d.status === "downloading"}
         <span class="hot">{d.fraction != null ? Math.round(d.fraction * 100) + "%" : d.total ? Math.round(pct) + "%" : ""}</span>
         <span>{bytes(d.received)}{d.total ? " of " + bytes(d.total) : ""}</span>
         <span>{speed(d.speed)}</span>
@@ -123,6 +125,9 @@
   }
   .ok {
     color: var(--ok);
+  }
+  .warn {
+    color: var(--warn);
   }
   .err {
     color: var(--danger);

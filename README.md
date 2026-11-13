@@ -23,7 +23,9 @@ Paste (or on Android, **Share**) any link and Vidra decides what it is:
 | **A listing page** with no videos on it | Opens each card/thumbnail it links to and collects the videos inside ("Look inside linked pages"). |
 | **A paginated site** | Detects the pagination (`rel="next"`, numbered links, "Next ›" buttons, or `?page=N` / `/page/N` URL patterns). Jump to any page, or **Collect** the next 3, 5, 10 or 20 pages in one go. |
 
-Downloads run up to 3 at a time with live speed and time left, can be paused and resumed (even after closing the app), retry automatically when a connection drops, and keep the cookies and referer from the page you scanned, so sites that check them still work.
+When a page offers the same video in several qualities (360p/720p/1080p files, or an MP4 and an HLS stream of one clip), Vidra lists it once and keeps the best one.
+
+Downloads run 2 at a time with live speed and time left, wait and retry automatically when a site answers "429 Too Many Requests", can be paused and resumed (even after closing the app), retry automatically when a connection drops, and keep the cookies and referer from the page you scanned, so sites that check them still work.
 
 <p align="center"><img src="docs/mobile.jpg" alt="Vidra on Android" /></p>
 

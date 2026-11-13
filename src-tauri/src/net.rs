@@ -207,6 +207,128 @@ pub fn same_site(a: &Url, b: &Url) -> bool {
     }
 }
 
+// ------------------------------------------------------------ quality & identity
+
+/// Tokens that describe quality rather than *which* video it is.
+fn quality_token(t: &str) -> Option<u32> {
+    let t = t.to_ascii_lowercase();
+    let res = |n: &str| -> Option<u32> {
+        let v: u32 = n.parse().ok()?;
+        matches!(v, 144 | 180 | 240 | 270 | 360 | 405 | 480 | 540 | 576 | 720 | 900 | 1080 | 1440 | 2160 | 4320).then_some(v)
+    };
+    // 720, 720p, 1080p60, 2160p30
+    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        let rest = &t[digits.len()..];
+        if rest.is_empty() || rest == "p" || (rest.starts_with('p') && rest[1..].chars().all(|c| c.is_ascii_digit())) {
+            if let Some(v) = res(&digits) {
+                return Some(v);
+            }
+        }
+        // 1280x720
+        if let Some(h) = rest.strip_prefix('x') {
+            if h.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(hv) = h.parse::<u32>() {
+                    if (100..=4320).contains(&hv) {
+                        return Some(hv);
+                    }
+                }
+            }
+        }
+    }
+    Some(match t.as_str() {
+        "8k" => 4320,
+        "4k" | "uhd" | "2160" => 2160,
+        "2k" | "qhd" => 1440,
+        "fhd" | "fullhd" => 1080,
+        "hd" | "hq" | "high" => 720,
+        "sd" | "medium" | "med" => 480,
+        "lq" | "low" | "mobile" | "small" | "tiny" => 240,
+        _ => return None,
+    })
+}
+
+fn tokens(s: &str) -> impl Iterator<Item = &str> {
+    s.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty())
+}
+
+/// Best guess at the vertical resolution from free text (labels, attributes).
+pub fn quality_of_text(s: &str) -> Option<u32> {
+    tokens(s).filter_map(quality_token).max()
+}
+
+/// Resolution hinted by a URL's path or query (`/720p/`, `_1080.mp4`, `?quality=480`).
+pub fn quality_of_url(u: &Url) -> Option<u32> {
+    let path = percent_decode(u.path());
+    let q = u.query().map(percent_decode).unwrap_or_default();
+    quality_of_text(&path).max(quality_of_text(&q))
+}
+
+const GENERIC_NAMES: &[&str] = &[
+    "index", "master", "playlist", "video", "videos", "stream", "streams", "manifest", "media", "file", "files",
+    "download", "downloads", "source", "original", "default", "main", "chunklist", "prog", "hls", "mp4", "dash",
+    "play", "get", "v", "vod", "content", "output", "out",
+];
+
+fn identity_of_segment(seg: &str) -> String {
+    let seg = percent_decode(seg).to_ascii_lowercase();
+    let stem = match seg.rsplit_once('.') {
+        Some((a, e)) if e.len() <= 5 => a.to_string(),
+        _ => seg,
+    };
+    tokens(&stem)
+        .filter(|t| quality_token(t).is_none())
+        .filter(|t| !GENERIC_NAMES.contains(t))
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// What makes two links "the same video": the file name (or the folder it sits in,
+/// for names like `index.m3u8` / `720.mp4`) with quality words removed.
+/// `clip_720p.mp4`, `clip_1080p.mp4` and `clip/master.m3u8` all map to `clip`.
+pub fn group_key(u: &Url) -> String {
+    let segs: Vec<&str> = u.path_segments().map(|s| s.filter(|x| !x.is_empty()).collect()).unwrap_or_default();
+    for seg in segs.iter().rev() {
+        let id = identity_of_segment(seg);
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    u.as_str().to_string()
+}
+
+// ------------------------------------------------------------ rate limiting
+
+/// How long to wait before retrying a 429 / 503 answer (honours Retry-After).
+pub fn retry_wait(resp: &reqwest::Response, attempt: u32) -> Option<std::time::Duration> {
+    let s = resp.status().as_u16();
+    if s != 429 && s != 503 {
+        return None;
+    }
+    let header = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    let backoff = 2u64.saturating_pow(attempt.min(6)).min(60) + (attempt as u64 % 3);
+    Some(std::time::Duration::from_secs(header.unwrap_or(backoff).clamp(1, 120)))
+}
+
+/// A request that looks like a browser's <video> element fetching media.
+pub fn media_get(url: &Url, referer: Option<&str>) -> reqwest::RequestBuilder {
+    let mut r = CLIENT
+        .get(url.clone())
+        .header("Accept", "*/*")
+        .header("Accept-Encoding", "identity")
+        .header("Sec-Fetch-Dest", "video")
+        .header("Sec-Fetch-Mode", "no-cors");
+    if let Some(rf) = referer {
+        let site = Url::parse(rf).ok().map(|p| if same_site(&p, url) { "same-site" } else { "cross-site" }).unwrap_or("cross-site");
+        r = r.header(reqwest::header::REFERER, rf).header("Sec-Fetch-Site", site);
+    }
+    r
+}
+
 pub fn strip_fragment(mut u: Url) -> Url {
     u.set_fragment(None);
     u
@@ -229,6 +351,25 @@ mod tests {
     fn normalizes_input() {
         assert_eq!(normalize_input(" example.com/x ").unwrap().as_str(), "https://example.com/x");
         assert!(normalize_input("ftp://x").is_err());
+    }
+
+    #[test]
+    fn groups_quality_variants() {
+        let k = |s: &str| group_key(&Url::parse(s).unwrap());
+        let q = |s: &str| quality_of_url(&Url::parse(s).unwrap());
+        assert_eq!(k("https://c.x/v/clip_720p.mp4"), "clip");
+        assert_eq!(k("https://c.x/v/clip_1080p.mp4?token=abc"), "clip");
+        assert_eq!(k("https://c.x/hls/clip/master.m3u8"), "clip");
+        assert_eq!(k("https://c.x/abc123/720/index.m3u8"), "abc123");
+        assert_eq!(k("https://c.x/abc123/1080.mp4"), "abc123");
+        assert_ne!(k("https://c.x/a/video.mp4"), k("https://c.x/b/video.mp4"));
+        assert_ne!(k("https://c.x/v/sunset.mp4"), k("https://c.x/v/sunrise.mp4"));
+        assert_eq!(q("https://c.x/v/clip_1080p60.mp4"), Some(1080));
+        assert_eq!(q("https://c.x/v/clip-1280x720.mp4"), Some(720));
+        assert_eq!(q("https://c.x/get?quality=480"), Some(480));
+        assert_eq!(q("https://c.x/v/2024/clip.mp4"), None);
+        assert_eq!(quality_of_text("HD 720p"), Some(720));
+        assert_eq!(quality_of_text("4K"), Some(2160));
     }
 
     #[test]

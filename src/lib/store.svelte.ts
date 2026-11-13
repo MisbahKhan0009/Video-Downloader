@@ -1,7 +1,7 @@
 import { SvelteSet } from "svelte/reactivity";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { api, onDeepScan, onDownload, type DetailLink, type PageScan, type Progress, type VideoItem, type VideoKind } from "./api";
-import { looksLikeUrl, titleOf, uid } from "./format";
+import { better, looksLikeUrl, rank, titleOf, uid } from "./format";
 import { applyTheme, randomCorner, themeById } from "./theme";
 
 export type View = "grab" | "downloads" | "settings";
@@ -22,6 +22,7 @@ export interface Download {
   path: string | null;
   fileName: string | null;
   error: string | null;
+  note?: string | null;
   addedAt: number;
 }
 
@@ -210,11 +211,27 @@ class Store {
     }
   }
 
+  /** One entry per video: a better-quality variant replaces the one already listed. */
   #addVideos(list: VideoItem[]) {
     if (!list.length) return;
-    const have = new Set(this.videos.map((v) => v.url));
-    const fresh = list.filter((v) => !have.has(v.url));
-    if (fresh.length) this.videos = [...this.videos, ...fresh];
+    const next = [...this.videos];
+    let changed = false;
+    for (const v of list) {
+      const i = next.findIndex((o) => o.url === v.url || (o.group && o.group === v.group));
+      if (i === -1) {
+        next.push(v);
+        changed = true;
+      } else if (next[i].url !== v.url && better(rank(v), rank(next[i]))) {
+        const old = next[i];
+        next[i] = { ...v, title: v.title ?? old.title, thumbnail: v.thumbnail ?? old.thumbnail };
+        if (this.selected.has(old.url)) {
+          this.selected.delete(old.url);
+          this.selected.add(v.url);
+        }
+        changed = true;
+      }
+    }
+    if (changed) this.videos = next;
   }
 
   async #maybeDeep(p: PageScan, force = false) {
@@ -357,7 +374,7 @@ class Store {
   #start(d: Download) {
     api
       .startDownload({ id: d.id, url: d.url, kind: d.kind, title: d.title, referer: d.referer, dir: d.dir })
-      .catch((e) => this.#onProgress({ ...d, status: "error", error: String(e), speed: 0 }));
+      .catch((e) => this.#onProgress({ ...d, status: "error", error: String(e), speed: 0, note: null }));
   }
 
   resume(id: string) {
@@ -424,6 +441,7 @@ class Store {
     d.fraction = p.fraction;
     d.speed = p.speed;
     d.error = p.error;
+    d.note = p.note;
     if (p.path) d.path = p.path;
     if (p.fileName) d.fileName = p.fileName;
     if (prev !== p.status) {

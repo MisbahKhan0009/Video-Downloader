@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use futures_util::{stream, StreamExt};
-use reqwest::header::{CONTENT_DISPOSITION, CONTENT_RANGE, CONTENT_TYPE, RANGE, REFERER};
+use reqwest::header::{CONTENT_DISPOSITION, CONTENT_RANGE, CONTENT_TYPE, RANGE};
 use serde::{Deserialize, Serialize};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -17,7 +17,7 @@ use tokio::sync::Semaphore;
 use url::Url;
 
 use crate::analyze::friendly;
-use crate::net::{self, CLIENT};
+use crate::net;
 
 const RUN: u8 = 0;
 const PAUSE: u8 = 1;
@@ -50,6 +50,8 @@ pub struct Progress {
     pub path: Option<String>,
     pub file_name: Option<String>,
     pub error: Option<String>,
+    /// Temporary state worth showing, e.g. "Site is busy, retrying in 8s".
+    pub note: Option<String>,
 }
 
 struct Ctl {
@@ -142,6 +144,10 @@ impl<F: Fn(Progress)> Reporter<F> {
         p.speed = self.speed;
         (self.emit)(p);
     }
+    fn note(&mut self, n: Option<String>) {
+        self.base.note = n;
+        self.flush();
+    }
     fn finish(&mut self, status: &str, error: Option<String>) {
         self.base.status = status.into();
         self.base.error = error;
@@ -222,6 +228,21 @@ fn check(ctl: &Ctl) -> Option<Outcome> {
     }
 }
 
+/// Sleep, but wake up early if the user pauses or cancels.
+async fn wait_or_stop(ctl: &Ctl, d: Duration) -> Option<Outcome> {
+    let end = Instant::now() + d;
+    while Instant::now() < end {
+        if let Some(o) = check(ctl) {
+            return Some(o);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    None
+}
+
+const RATE_LIMIT_TRIES: u32 = 8;
+const RATE_LIMIT_MSG: &str = "The site is limiting requests (429). Wait a few minutes, then press retry";
+
 async fn download_file<F: Fn(Progress)>(
     req: &DownloadRequest,
     dir: &Path,
@@ -233,16 +254,12 @@ async fn download_file<F: Fn(Progress)>(
     let mut attempts = 0;
     let mut name_hint: Option<String> = None;
     let mut ext_hint: Option<String> = None;
+    let mut limited = 0u32;
 
     loop {
         let have = fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
-        let mut r = CLIENT.get(url.clone()).header("Accept-Encoding", "identity");
-        if have > 0 {
-            r = r.header(RANGE, format!("bytes={have}-"));
-        }
-        if let Some(rf) = &req.referer {
-            r = r.header(REFERER, rf);
-        }
+        // Like a browser's <video>: always a ranged request.
+        let r = net::media_get(&url, req.referer.as_deref()).header(RANGE, format!("bytes={have}-"));
         let resp = match r.send().await {
             Ok(x) => x,
             Err(e) => {
@@ -254,6 +271,19 @@ async fn download_file<F: Fn(Progress)>(
                 continue;
             }
         };
+        if let Some(wait) = net::retry_wait(&resp, limited) {
+            limited += 1;
+            if limited > RATE_LIMIT_TRIES {
+                return Err(RATE_LIMIT_MSG.into());
+            }
+            rep.note(Some(format!("Site is busy, retrying in {}s", wait.as_secs())));
+            if let Some(o) = wait_or_stop(ctl, wait).await {
+                return Ok(o);
+            }
+            rep.note(None);
+            continue;
+        }
+        rep.base.note = None;
         let status = resp.status().as_u16();
         if status == 416 && have > 0 {
             // Already have every byte.
@@ -399,11 +429,18 @@ fn attr<'a>(line: &'a str, name: &str) -> Option<&'a str> {
 }
 
 async fn get_text(url: &Url, referer: Option<&str>) -> Result<String, String> {
-    let mut r = CLIENT.get(url.clone());
-    if let Some(rf) = referer {
-        r = r.header(REFERER, rf);
-    }
-    let resp = r.send().await.map_err(|e| friendly(&e))?;
+    let mut limited = 0;
+    let resp = loop {
+        let resp = net::media_get(url, referer).send().await.map_err(|e| friendly(&e))?;
+        match net::retry_wait(&resp, limited) {
+            Some(w) if limited < RATE_LIMIT_TRIES => {
+                limited += 1;
+                tokio::time::sleep(w).await;
+            }
+            Some(_) => return Err(RATE_LIMIT_MSG.into()),
+            None => break resp,
+        }
+    };
     if !resp.status().is_success() {
         return Err(format!("Playlist request failed ({})", resp.status().as_u16()));
     }
@@ -412,12 +449,19 @@ async fn get_text(url: &Url, referer: Option<&str>) -> Result<String, String> {
 
 async fn get_bytes(url: &Url, referer: Option<&str>) -> Result<Vec<u8>, String> {
     let mut last = String::new();
-    for attempt in 0..4u64 {
-        let mut r = CLIENT.get(url.clone());
-        if let Some(rf) = referer {
-            r = r.header(REFERER, rf);
-        }
-        match r.send().await {
+    let mut limited = 0u32;
+    let mut attempt = 0u64;
+    while attempt < 4 {
+        match net::media_get(url, referer).send().await {
+            Ok(resp) if net::retry_wait(&resp, limited).is_some() => {
+                let w = net::retry_wait(&resp, limited).unwrap();
+                limited += 1;
+                if limited > RATE_LIMIT_TRIES {
+                    return Err(RATE_LIMIT_MSG.into());
+                }
+                tokio::time::sleep(w).await;
+                continue; // rate limiting doesn't use up a normal retry
+            }
             Ok(resp) if resp.status().is_success() => match resp.bytes().await {
                 Ok(b) => return Ok(b.to_vec()),
                 Err(e) => last = friendly(&e),
@@ -425,7 +469,8 @@ async fn get_bytes(url: &Url, referer: Option<&str>) -> Result<Vec<u8>, String> 
             Ok(resp) => last = format!("Segment request failed ({})", resp.status().as_u16()),
             Err(e) => last = friendly(&e),
         }
-        tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
+        attempt += 1;
+        tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
     }
     Err(last)
 }
@@ -557,7 +602,7 @@ async fn download_hls<F: Fn(Progress)>(
             (s, data)
         }
     }))
-    .buffered(4);
+    .buffered(3);
 
     while let Some((seg, data)) = fetched.next().await {
         let mut data = data?;

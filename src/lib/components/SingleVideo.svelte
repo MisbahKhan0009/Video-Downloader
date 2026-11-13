@@ -7,7 +7,7 @@
   import Thumb from "./Thumb.svelte";
   import { app } from "$lib/store.svelte";
   import { api, type VideoItem } from "$lib/api";
-  import { bytes, eta, host, label, speed, titleOf } from "$lib/format";
+  import { bytes, eta, host, label, qualityLabel, speed, titleOf } from "$lib/format";
 
   let { video }: { video: VideoItem } = $props();
   let name = $state("");
@@ -37,6 +37,7 @@
     </label>
     <dl class="facts">
       <div><dt>Format</dt><dd class="mono">{video.kind === "hls" ? "HLS stream" : label(video)}</dd></div>
+      {#if video.quality}<div><dt>Quality</dt><dd class="mono">{qualityLabel(video.quality)}</dd></div>{/if}
       <div><dt>Size</dt><dd class="mono">{bytes(video.size ?? dl?.total ?? null) || "Unknown"}</dd></div>
       <div><dt>Save to</dt><dd class="mono path" title={app.settings.dir}>{app.settings.dir}</dd></div>
     </dl>
@@ -49,6 +50,8 @@
             <span class="ok">Saved · {dl.fileName}</span>
           {:else if dl.status === "error"}
             <span class="err">{dl.error}</span>
+          {:else if dl.note}
+            <span class="warn">{dl.note}</span>
           {:else}
             <span>{bytes(dl.received)}{dl.total ? " / " + bytes(dl.total) : ""}</span>
             <span>{dl.status === "downloading" ? speed(dl.speed) : dl.status}</span>
@@ -186,6 +189,9 @@
   }
   .err {
     color: var(--danger);
+  }
+  .warn {
+    color: var(--warn);
   }
   .row {
     margin-top: auto;

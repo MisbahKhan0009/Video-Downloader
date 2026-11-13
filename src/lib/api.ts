@@ -12,6 +12,10 @@ export interface VideoItem {
   pageUrl: string | null;
   size: number | null;
   source: string;
+  /** vertical resolution when known (720, 1080…) */
+  quality: number | null;
+  /** identical for every quality variant of one video */
+  group: string;
 }
 
 export interface PageLink {
@@ -62,6 +66,8 @@ export interface Progress {
   path: string | null;
   fileName: string | null;
   error: string | null;
+  /** temporary state, e.g. "Site is busy, retrying in 8s" */
+  note: string | null;
 }
 
 export interface DeepProgress {

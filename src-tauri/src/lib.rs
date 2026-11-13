@@ -185,7 +185,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .manage(AppState { downloads: Arc::new(download::Manager::new(3)), scans: Mutex::new(HashMap::new()) })
+        .manage(AppState { downloads: Arc::new(download::Manager::new(2)), scans: Mutex::new(HashMap::new()) })
         .invoke_handler(tauri::generate_handler![
             analyze_link,
             scan_page,

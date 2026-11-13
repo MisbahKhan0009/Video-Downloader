@@ -89,7 +89,7 @@
   <Logo size={40} />
   <div>
     <div class="o-name">Vidra <span class="mono ver">0.1.0</span></div>
-    <div class="o-desc">Downloads up to 3 videos at once. Partial downloads resume where they stopped, even after a restart. Only download videos you have the right to save.</div>
+    <div class="o-desc">Downloads 2 videos at a time and slows down automatically when a site limits requests. Partial downloads resume where they stopped, even after a restart. Only download videos you have the right to save.</div>
   </div>
   <button class="icon-btn" title="Source on GitHub" onclick={() => api.openUrl("https://github.com/MisbahKhan0009/Video-Downloader")}>
     <Code size={18} />

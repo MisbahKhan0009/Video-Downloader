@@ -48,12 +48,21 @@ fn size_from_headers(h: &reqwest::header::HeaderMap, partial: bool) -> Option<u6
 /// Cheap check of a media URL: type and size, using a 1-byte ranged GET
 /// (more servers answer that correctly than HEAD).
 pub async fn probe(url: &Url, referer: Option<&str>) -> Probe {
-    let mut req = CLIENT.get(url.clone()).header(RANGE, "bytes=0-0").header("Accept-Encoding", "identity");
-    if let Some(r) = referer {
-        req = req.header(REFERER, r);
-    }
-    let fut = req.send();
-    match tokio::time::timeout(std::time::Duration::from_secs(12), fut).await {
+    let attempt = async {
+        let mut tries = 0;
+        loop {
+            let resp = net::media_get(url, referer).header(RANGE, "bytes=0-0").send().await?;
+            match net::retry_wait(&resp, tries) {
+                // Only wait briefly here; a size estimate isn't worth a long delay.
+                Some(w) if tries < 2 && w.as_secs() <= 5 => {
+                    tries += 1;
+                    tokio::time::sleep(w).await;
+                }
+                _ => return Ok::<_, reqwest::Error>(resp),
+            }
+        }
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(20), attempt).await {
         Ok(Ok(resp)) if resp.status().is_success() => {
             let partial = resp.status().as_u16() == 206;
             let ct = resp.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(String::from);
@@ -67,6 +76,8 @@ pub async fn probe(url: &Url, referer: Option<&str>) -> Probe {
 
 fn video_from_url(url: &Url, kind: LinkKind, referer: Option<String>) -> VideoItem {
     VideoItem {
+        quality: net::quality_of_url(url),
+        group: net::group_key(url),
         url: url.to_string(),
         title: net::stem_from_url(url),
         thumbnail: None,
@@ -85,13 +96,25 @@ enum Fetched {
 }
 
 async fn fetch(url: &Url, referer: Option<&str>) -> Result<Fetched, String> {
-    let mut req = CLIENT
-        .get(url.clone())
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-    if let Some(r) = referer {
-        req = req.header(REFERER, r);
-    }
-    let resp = req.send().await.map_err(|e| friendly(&e))?;
+    let mut attempt = 0;
+    let resp = loop {
+        let mut req = CLIENT
+            .get(url.clone())
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        if let Some(r) = referer {
+            req = req.header(REFERER, r);
+        }
+        let resp = req.send().await.map_err(|e| friendly(&e))?;
+        // Too many requests: wait as the site asks, then try again.
+        match net::retry_wait(&resp, attempt) {
+            Some(wait) if attempt < 5 => {
+                attempt += 1;
+                tokio::time::sleep(wait).await;
+            }
+            Some(_) => return Err("The site is limiting requests (429). Wait a minute and try again".into()),
+            None => break resp,
+        }
+    };
     let status = resp.status();
     if !status.is_success() {
         return Err(format!("The site answered {} {}", status.as_u16(), status.canonical_reason().unwrap_or("")));
@@ -204,7 +227,7 @@ where
     F: Fn(DeepProgress),
 {
     let total = links.len();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new(); // groups already sent to the UI
     let mut all: Vec<VideoItem> = Vec::new();
     let mut done = 0usize;
 
@@ -215,7 +238,14 @@ where
             if cancel.load(Ordering::Relaxed) {
                 return Vec::new();
             }
-            let Ok(page) = scan_page(&link.url, referer.as_deref()).await else { return Vec::new() };
+            let Ok(mut page) = scan_page(&link.url, referer.as_deref()).await else { return Vec::new() };
+            // A card's page is one video. If it still lists several without their own
+            // titles, they're qualities of that video: keep only the best.
+            if page.videos.len() > 1 && page.videos.iter().all(|v| v.title.is_none() || v.title == page.videos[0].title) {
+                let g = page.videos[0].group.clone();
+                page.videos.iter_mut().for_each(|v| v.group = g.clone());
+                page.videos = scan::collapse_variants(std::mem::take(&mut page.videos));
+            }
             let single = page.videos.len() == 1;
             page.videos
                 .into_iter()
@@ -232,12 +262,20 @@ where
                 .collect::<Vec<_>>()
         }
     }))
-    .buffer_unordered(6);
+    .buffer_unordered(3); // gentle on the site: fewer 429s
 
     while let Some(found) = results.next().await {
         done += 1;
-        let fresh: Vec<VideoItem> = found.into_iter().filter(|v| seen.insert(v.url.clone())).collect();
+        // The UI replaces an existing entry when a better variant of the same group arrives.
+        let fresh: Vec<VideoItem> = found
+            .into_iter()
+            .filter(|v| {
+                let better = all.iter().find(|o| o.group == v.group).is_none_or(|o| v.rank() > o.rank());
+                seen.insert(v.url.clone()) && better
+            })
+            .collect();
         all.extend(fresh.iter().cloned());
+        all = scan::collapse_variants(std::mem::take(&mut all));
         on_progress(DeepProgress { scan_id: scan_id.clone(), done, total, found: all.len(), videos: fresh });
         if cancel.load(Ordering::Relaxed) {
             break;

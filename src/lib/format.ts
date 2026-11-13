@@ -52,6 +52,23 @@ export function label(v: { kind: string; ext: string | null }): string {
   return (v.ext ?? "video").toUpperCase();
 }
 
+export function qualityLabel(q: number | null | undefined): string {
+  if (!q) return "";
+  if (q >= 4320) return "8K";
+  if (q >= 2160) return "4K";
+  return `${q}p`;
+}
+
+/** Same ordering as the backend: resolution, then direct file over stream, then size. */
+export function rank(v: { quality: number | null; kind: string; size: number | null }): number[] {
+  return [v.quality ?? 0, v.kind === "file" ? 1 : 0, v.size ?? 0];
+}
+
+export function better(a: number[], b: number[]): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
+
 const VIDEO_RE = /\.(mp4|m4v|webm|mkv|mov|avi|flv|wmv|3gp|ogv|mpg|mpeg)(\?|#|$)/i;
 const HLS_RE = /\.m3u8(\?|#|$)/i;
 
